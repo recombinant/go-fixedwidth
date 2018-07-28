@@ -161,15 +161,20 @@ func structEncoder(v reflect.Value) ([]byte, error) {
 		var (
 			err  error
 			spec fieldSpec
-			ok   bool
 		)
-		spec.startPos, spec.endPos, ok = parseTag(f.Tag.Get("fixed"))
-		if !ok {
+		spec, err = parseTag(f.Tag.Get("fixed"))
+		if err != nil {
 			continue
 		}
-		spec.value, err = newValueEncoder(f.Type)(v.Field(i))
+		value, err := newValueEncoder(f.Type)(v.Field(i))
 		if err != nil {
 			return nil, err
+		}
+		if len(value) < spec.fieldLength() && spec.leftpad {
+			spec.value = bytes.Repeat([]byte{spec.leftpadChar(f.Type)}, spec.fieldLength())
+			copy(spec.value[spec.fieldLength()-len(value):len(spec.value)], value)
+		} else {
+			spec.value = value
 		}
 		specs = append(specs, spec)
 	}
@@ -178,7 +183,35 @@ func structEncoder(v reflect.Value) ([]byte, error) {
 
 type fieldSpec struct {
 	startPos, endPos int
+	leftpad          bool
 	value            []byte
+}
+
+func (f fieldSpec) fieldLength() int {
+	return f.endPos - f.startPos + 1
+}
+
+func (f fieldSpec) leftpadChar(t reflect.Type) byte {
+	if t.Implements(reflect.TypeOf(new(encoding.TextMarshaler)).Elem()) {
+		return ' '
+	}
+
+	switch t.Kind() {
+	case reflect.Ptr:
+		return f.leftpadChar(t.Elem())
+	case reflect.Interface:
+		return ' '
+	case reflect.Struct:
+		return ' '
+	case reflect.String:
+		return ' '
+	case reflect.Int, reflect.Int64, reflect.Int32, reflect.Int16, reflect.Int8:
+		return '0'
+	case reflect.Float32, reflect.Float64:
+		return '0'
+	default:
+		return ' '
+	}
 }
 
 func encodeSpecs(specs []fieldSpec) []byte {
@@ -190,11 +223,7 @@ func encodeSpecs(specs []fieldSpec) []byte {
 	}
 	data := bytes.Repeat([]byte(" "), ll)
 	for _, spec := range specs {
-		for i, b := range spec.value {
-			if spec.startPos+i <= spec.endPos {
-				data[spec.startPos+i-1] = b
-			}
-		}
+		copy(data[spec.startPos-1:spec.endPos], spec.value)
 	}
 	return data
 }
